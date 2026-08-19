@@ -1,0 +1,549 @@
+#!/bin/bash
+
+# --- INFORMACIÓN DEL MÓDULO ---
+V="1.3.0"
+DESCRIPCION="Gestión y Configuración de Cortafuegos UFW para Linux"
+AUTOR="DanSanMar"
+
+# --- CONFIGURACIÓN DE COLORES (Estilo STK) ---
+RESET='\e[0m'
+NEGRITA='\e[1m'
+VERDE_BRILLANTE='\e[92m'
+VERDE='\e[32m'
+AMARILLO='\e[33m'
+AZUL='\e[34m'
+AZUL_BRILLANTE='\e[94m'
+CIAN='\e[36m'
+MAGENTA='\e[35m'
+ROJO='\e[31m'
+ROJO_BRILLANTE='\e[91m'
+
+# --- CONFIGURACIÓN DE LOGS DE GESTIÓN ---
+LOG_FILE="/var/log/stk_mantenimiento.log"
+LOG_INFO="INFO"
+LOG_WARN="WARN"
+LOG_ERR="ERROR"
+
+registrar_log() {
+    local NIVEL="${1:-INFO}"
+    local MENSAJE="${2}"
+    local FECHA
+    FECHA=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$FECHA] [$NIVEL] [$USER] - [STOP4ME] $MENSAJE" >> "$LOG_FILE"
+}
+
+pintar() { 
+    local COLOR="$1" 
+    local MENSAJE="$2" 
+    echo -e "${COLOR}${MENSAJE}${RESET}"
+}
+
+# --- COMPROBACIÓN DE PRIVILEGIOS DE ROOT ---
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${ROJO_BRILLANTE}⚠️ Error: Este script requiere privilegios de root.${RESET}"
+    echo -e "${AMARILLO}Prueba con: sudo $0${RESET}"
+    exit 1
+fi
+
+if [ ! -f "$LOG_FILE" ]; then
+    umask 027
+    touch "$LOG_FILE"
+    chmod 640 "$LOG_FILE"
+    registrar_log "$LOG_INFO" "Bitácora inicializada desde STOP4ME v$V"
+fi
+
+# --- DETECCIÓN DEL GESTOR DE PAQUETES ---
+Package=""
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_ID="${ID:-unknown}"
+    OS_LIKE="${ID_LIKE:-unknown}"
+fi
+
+case "$OS_ID" in
+    debian|ubuntu|linuxmint|pop|kali|raspbian) Package="apt" ;;
+    fedora|rhel|centos|rocky|almalinux)        Package="dnf" ;;
+    arch|manjaro|endeavouros|garuda)           Package="pacman" ;;
+    opensuse*|suse)                            Package="zypper" ;;
+    *)
+        if [[ "$OS_LIKE" == *"debian"* ]]; then Package="apt"
+        elif [[ "$OS_LIKE" == *"fedora"* ]] || [[ "$OS_LIKE" == *"rhel"* ]]; then Package="dnf"
+        elif [[ "$OS_LIKE" == *"arch"* ]]; then Package="pacman"
+        elif command -v apt &>/dev/null;    then Package="apt"
+        elif command -v dnf &>/dev/null;    then Package="dnf"
+        elif command -v pacman &>/dev/null; then Package="pacman"
+        else Package="unknown"; fi
+        ;;
+esac
+
+# --- LOGO ASCII ---
+mostrar_logo_stop4me() {
+    echo -e "${ROJO}  ███████╗████████╗██████╗ ██████╗  ██╗  ██╗███╗   ███╗███████╗${RESET}"
+    echo -e "${ROJO_BRILLANTE}  ██╔════╝╚══██╔══╝██╔═══██╗██╔══██╗ ██║  ██║████╗ ████║██╔════╝${RESET}"
+    echo -e "${AMARILLO}  ███████╗   ██║   ██║   ██║██████╔╝ ███████║██╔████╔██║█████╗  ${RESET}"
+    echo -e "${AMARILLO}  ╚════██║   ██║   ██║   ██║██╔═══╝  ╚════██║██║╚██╔╝██║██╔══╝  ${RESET}"
+    echo -e "${VERDE}  ███████║   ██║   ╚██████╔╝██║           ██║██║ ╚═╝ ██║███████╗${RESET}"
+    echo -e "${VERDE_BRILLANTE}  ╚══════╝   ╚═╝    ╚═════╝ ╚═╝           ╚═╝╚═╝     ╚═╝╚══════╝${RESET}"
+    echo -e "${VERDE_BRILLANTE}  UFW FIREWALL MANAGER - STOP4ME    ${RESET}\n${AZUL_BRILLANTE}  v${V}${RESET}"
+    echo -e "${AZUL}  By: ${AUTOR}${RESET}"
+    echo -e "${CIAN}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    echo -e "${AMARILLO}➤ Sistema detectado:${RESET} ${AZUL}${OS_ID:-"Desconocido"}${RESET}"
+    echo -e "${AMARILLO}➤ Gestor de Paquetes:${RESET} ${AZUL}${Package:-"Desconocido"}${RESET}"
+    
+    if command -v ufw &>/dev/null; then
+        local st_ufw
+        st_ufw=$(ufw status 2>/dev/null | head -n 1)
+        if [[ "$st_ufw" == *"active"* ]] && [[ "$st_ufw" != *"inactive"* ]]; then
+            echo -e "${AMARILLO}➤ Estado UFW:${RESET} ${VERDE_BRILLANTE}ACTIVO 🛡️${RESET}"
+        else
+            echo -e "${AMARILLO}➤ Estado UFW:${RESET} ${ROJO_BRILLANTE}INACTIVO ⚠️${RESET}"
+        fi
+    else
+        echo -e "${AMARILLO}➤ Estado UFW:${RESET} ${ROJO}NO INSTALADO ❌${RESET}"
+    fi
+    echo -e "${CIAN}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+}
+
+# --- ESTILOS DE SELECCIÓN ---
+fzf_estilo() {
+    local prompt_text="$1"
+    local header_text="$2"
+    fzf --ansi \
+        --height=15 \
+        --reverse \
+        --border=rounded \
+        --prompt="➤ $prompt_text: " \
+        --header="$header_text" \
+        --color="border:#ff5555,pointer:#92ff92,header:#5fb2ff"
+}
+
+salir_stop4me() {
+    echo -e "\n${VERDE}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+    pintar "$AZUL" "Saliendo de STOP4ME..."
+    pintar "$VERDE" "¡Seguridad en la red garantizada con STK!"
+    echo -e "${VERDE}  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
+    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+        exit 0
+    fi
+}
+
+# --- VERIFICACIÓN DE DEPENDENCIAS ---
+verificar_e_instalar_ufw() {
+    if ! command -v ufw &>/dev/null; then
+        clear
+        mostrar_logo_stop4me
+        pintar "$AMARILLO" "⚠️ No se detectó el cortafuegos 'ufw' instalado en el sistema."
+        echo -ne "${CIAN}¿Desea instalar UFW automáticamente usando $Package? (s/N): ${RESET}"
+        read -r inst_conf
+
+        if [[ "$inst_conf" =~ ^[sS]$ ]]; then
+            echo -e "\n${AZUL}🔄 Instalando UFW...${RESET}"
+            case "$Package" in
+                apt) apt update -y && apt install -y ufw ;;
+                dnf) dnf install -y ufw ;;
+                pacman) pacman -S --noconfirm ufw ;;
+                zypper) zypper install -y ufw ;;
+                *) pintar "$ROJO" "❌ No se puede instalar UFW automáticamente." ; return 1 ;;
+            esac
+
+            if command -v ufw &>/dev/null; then
+                pintar "$VERDE_BRILLANTE" "✔ UFW instalado con éxito."
+                registrar_log "$LOG_INFO" "UFW instalado correctamente."
+            else
+                pintar "$ROJO" "❌ Error instalando UFW."
+                read -p "Presione Enter para volver..."
+                return 1
+            fi
+        else
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# --- FUNCIONES DE CONTROL UFW ---
+
+gestionar_estado_ufw() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$MAGENTA" "--- CONTROL DE ESTADO DE UFW ---"
+
+    local st_ufw
+    st_ufw=$(ufw status 2>/dev/null | head -n 1)
+
+    local opciones=""
+    if [[ "$st_ufw" == *"active"* ]] && [[ "$st_ufw" != *"inactive"* ]]; then
+        opciones="1. 🛑 Desactivar Cortafuegos (Disable)\n2. 🔄 Reiniciar Cortafuegos (Reload)\n3. ↩ Volver"
+    else
+        opciones="1. 🛡️ Activar Cortafuegos (Enable)\n2. ↩ Volver"
+    fi
+
+    local sel
+    sel=$(echo -e "$opciones" | fzf_estilo "Acción de Estado" "ESTADO DE UFW")
+
+    case ${sel:0:1} in
+        1)
+            if [[ "$st_ufw" == *"active"* ]] && [[ "$st_ufw" != *"inactive"* ]]; then
+                ufw --force disable
+                registrar_log "$LOG_WARN" "Cortafuegos UFW desactivado."
+                pintar "$ROJO_BRILLANTE" "⚠️ UFW ha sido desactivado."
+            else
+                systemctl enable ufw &>/dev/null
+                ufw --force enable
+                registrar_log "$LOG_INFO" "Cortafuegos UFW activado."
+                pintar "$VERDE_BRILLANTE" "✔ UFW ha sido activado correctamente."
+            fi
+            read -p "Presione Enter para continuar..."
+            ;;
+        2)
+            if [[ "$st_ufw" == *"active"* ]] && [[ "$st_ufw" != *"inactive"* ]]; then
+                ufw reload
+                registrar_log "$LOG_INFO" "Reglas de UFW recargadas."
+                pintar "$VERDE" "✔ Reglas recargadas correctamente."
+                read -p "Presione Enter para continuar..."
+            fi
+            ;;
+    esac
+}
+
+ver_estado_y_reglas() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$CIAN" "--- ESTADO Y REGLAS DE FILTRADO (UFW) ---"
+    echo ""
+    
+    if ufw status 2>/dev/null | grep -q "inactive"; then
+        pintar "$AMARILLO" "⚠️ El cortafuegos se encuentra actualmente DESACTIVADO."
+    else
+        echo -e "${VERDE_BRILLANTE}📋 REGLAS NUMERADAS ACTIVAS:${RESET}\n"
+        ufw status numbered
+    fi
+    
+    echo ""
+    read -p "Presione Enter para volver..."
+}
+
+agregar_regla_puerto() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$CIAN" "--- AÑADIR REGLA POR PUERTO / SERVICIO ---"
+
+    echo -ne "\n${AMARILLO}Ingrese el puerto o servicio (ej: 80, 443, 22/tcp, ssh): ${RESET}"
+    read -r puerto
+
+    if [[ -z "$puerto" ]]; then
+        pintar "$ROJO" "⚠️ El puerto no puede estar vacío."
+        sleep 1.5; return
+    fi
+
+    local accion_opt="1. 🟢 Permitir Tráfico (ALLOW)\n2. 🔴 Denegar Tráfico (DENY)\n3. 🚫 Rechazar Tráfico (REJECT)"
+    local sel_acc
+    sel_acc=$(echo -e "$accion_opt" | fzf_estilo "Acción" "POLÍTICA PARA PUERTO $puerto")
+
+    local tipo_acc=""
+    case ${sel_acc:0:1} in
+        1) tipo_acc="allow" ;;
+        2) tipo_acc="deny" ;;
+        3) tipo_acc="reject" ;;
+        *) return ;;
+    esac
+
+    echo -e "\n${AZUL}🔄 Aplicando regla UFW...${RESET}"
+    if ufw $tipo_acc "$puerto"; then
+        pintar "$VERDE_BRILLANTE" "✔ Regla añadida correctamente: $puerto ($tipo_acc)"
+        registrar_log "$LOG_INFO" "Regla UFW añadida: $tipo_acc $puerto"
+    else
+        pintar "$ROJO" "❌ Error al intentar añadir la regla."
+        registrar_log "$LOG_ERR" "Error al añadir regla UFW: $tipo_acc $puerto"
+    fi
+
+    read -p "Presione Enter para continuar..."
+}
+
+gestionar_regla_ip() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$CIAN" "--- GESTIÓN DE REGLAS POR DIRECCIÓN IP ---"
+
+    echo -ne "\n${AMARILLO}Ingrese IP o Subred (ej: 192.168.1.50 o 192.168.1.0/24): ${RESET}"
+    read -r ip_target
+
+    if [[ -z "$ip_target" ]]; then
+        pintar "$ROJO" "⚠️ La dirección IP no puede estar vacía."
+        sleep 1.5; return
+    fi
+
+    local accion_opt="1. 🟢 Permitir IP (ALLOW)\n2. 🔴 Bloquear/Denegar IP (DENY)\n3. 🎯 Permitir IP a Puerto Específico"
+    local sel_acc
+    sel_acc=$(echo -e "$accion_opt" | fzf_estilo "Acción" "POLÍTICA PARA IP $ip_target")
+
+    case ${sel_acc:0:1} in
+        1)
+            ufw allow from "$ip_target"
+            registrar_log "$LOG_INFO" "UFW: Permitido acceso a IP $ip_target"
+            ;;
+        2)
+            ufw deny from "$ip_target"
+            registrar_log "$LOG_WARN" "UFW: Bloqueada IP $ip_target"
+            ;;
+        3)
+            echo -ne "\n${AMARILLO}Ingrese el puerto de destino (ej: 22): ${RESET}"
+            read -r puerto_dest
+            if [ -n "$puerto_dest" ]; then
+                ufw allow from "$ip_target" to any port "$puerto_dest"
+                registrar_log "$LOG_INFO" "UFW: IP $ip_target permitida al puerto $puerto_dest"
+            fi
+            ;;
+        *) return ;;
+    esac
+
+    pintar "$VERDE_BRILLANTE" "✔ Regla de IP procesada con éxito."
+    read -p "Presione Enter para continuar..."
+}
+
+eliminar_regla() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$CIAN" "--- ELIMINAR REGLA DE FILTRADO ---"
+
+    local reglas
+    reglas=$(ufw status numbered 2>/dev/null | grep -E '^\[ *[0-9]+\]')
+
+    if [ -z "$reglas" ]; then
+        pintar "$AMARILLO" "No hay reglas de cortafuegos registradas para eliminar."
+        read -p "Presione Enter para continuar..."
+        return
+    fi
+
+    local sel_regla
+    sel_regla=$(echo "$reglas" | fzf_estilo "Seleccionar regla" "ELIMINACIÓN DE REGLAS")
+
+    if [ -n "$sel_regla" ]; then
+        local num_regla
+        num_regla=$(echo "$sel_regla" | sed -n 's/^\[ *\([0-9]*\)\].*/\1/p')
+
+        if [ -n "$num_regla" ]; then
+            echo -ne "\n${ROJO_BRILLANTE}⚠️ ¿Confirmar eliminación de la regla #$num_regla? (s/N): ${RESET}"
+            read -r conf
+            if [[ "$conf" =~ ^[sS]$ ]]; then
+                ufw --force delete "$num_regla"
+                pintar "$VERDE" "✔ Regla #$num_regla eliminada con éxito."
+                registrar_log "$LOG_WARN" "Regla UFW #$num_regla eliminada."
+            else
+                pintar "$AZUL" "Operación cancelada."
+            fi
+            read -p "Presione Enter para continuar..."
+        fi
+    fi
+}
+
+resetear_cortafuegos() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$ROJO_BRILLANTE" "--- ⚠️ REINICIO DE FÁBRICA / RESET UFW ---"
+    echo -e "${AMARILLO}Esta acción eliminará TODAS las reglas e inhabilitará el cortafuegos.${RESET}\n"
+
+    echo -ne "${ROJO_BRILLANTE}¿Está seguro de restablecer el cortafuegos a los valores por defecto? (s/N): ${RESET}"
+    read -r conf
+
+    if [[ "$conf" =~ ^[sS]$ ]]; then
+        echo "y" | ufw reset >/dev/null 2>&1
+        ufw --force disable >/dev/null 2>&1
+        
+        registrar_log "$LOG_WARN" "Reset completo de UFW ejecutado correctamente."
+        pintar "$VERDE_BRILLANTE" "✔ Cortafuegos restablecido de fábrica exitosamente."
+    else
+        pintar "$AZUL" "Operación cancelada."
+    fi
+    read -p "Presione Enter para continuar..."
+}
+
+# --- OBTENER LOGS DE TRÁFICO DEL KERNEL / UFW ---
+obtener_logs_trafico() {
+    if [ -f /var/log/ufw.log ]; then
+        cat /var/log/ufw.log
+    elif command -v journalctl &>/dev/null; then
+        journalctl -u ufw --no-pager -n 1000 2>/dev/null | grep "UFW"
+        if [ $? -ne 0 ]; then
+            dmesg | grep "UFW"
+        fi
+    elif [ -f /var/log/syslog ]; then
+        grep "UFW" /var/log/syslog
+    elif [ -f /var/log/messages ]; then
+        grep "UFW" /var/log/messages
+    else
+        echo ""
+    fi
+}
+
+# --- AUDITORÍA Y MONITOREO DE TRÁFICO Y ESCANEOS ---
+analizar_trafico_red() {
+    while true; do
+        clear
+        mostrar_logo_stop4me
+        pintar "$MAGENTA" "--- AUDITORÍA DE TRÁFICO DE RED Y ESCANEOS ---"
+
+        local log_status
+        log_status=$(ufw status verbose 2>/dev/null | grep "Logging:" | awk '{print $2}')
+        echo -e "${AMARILLO}➤ Estado del Registro de UFW (Logging):${RESET} ${AZUL}${log_status:-"desconocido"}${RESET}\n"
+
+        local opciones_tr="1. 🛑 Ver Todo el Tráfico BLOQUEADO [BLOCK/BLOCK/DENY]\n2. 🔍 Detectar Posibles Escaneos de Puertos (IPs sospechosas)\n3. ⚙️ Cambiar Nivel de Registro de UFW (Logging Level)\n4. 📋 Consultar Bitácora Interna del Script (stk_mantenimiento.log)\n5. ↩ Volver"
+        local sel_tr
+        sel_tr=$(echo -e "$opciones_tr" | fzf_estilo "Auditoría de Red" "SEGURIDAD DE RED Y ESCANEOS")
+
+        case ${sel_tr:0:1} in
+            1)
+                clear
+                pintar "$CIAN" "--- TRÁFICO RECHAZADO Y BLOQUEADO EN TIEMPO REAL ---"
+                echo -e "${AZUL}Usa FZF para filtrar por puerto (DPT=) o por IP de origen (SRC=)${RESET}\n"
+                
+                local datos_block
+                datos_block=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
+
+                if [ -z "$datos_block" ]; then
+                    pintar "$AMARILLO" "⚠️ No se registraron eventos de tráfico bloqueado recientemente."
+                    echo -e "${CIAN}Nota: Asegúrate de que el registro 'Logging' esté activado en nivel 'low' o 'medium'.${RESET}"
+                else
+                    echo "$datos_block" | fzf --ansi --height=20 --reverse --border=rounded --prompt="🔍 Filtrar bloqueos: "
+                fi
+                read -p "Presione Enter para continuar..."
+                ;;
+
+            2)
+                clear
+                pintar "$ROJO_BRILLANTE" "--- DETECCIÓN DE POSIBLES ESCANEOS DE PUERTOS ---"
+                echo -e "${AZUL}IPs con múltiples intentos de conexión bloqueados recientemente:${RESET}\n"
+
+                local escaneres
+                escaneres=$(obtener_logs_trafico | grep -E "BLOCK|DENY" | grep -oE "SRC=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | cut -d'=' -f2 | sort | uniq -c | sort -nr)
+
+                if [ -z "$escaneres" ]; then
+                    pintar "$VERDE_BRILLANTE" "✔ No se han detectado patrones de escaneo de puertos en las bitácoras actuales."
+                else
+                    echo -e "${ROJO}VECES BLOQUEADA   |   DIRECCIÓN IP DE ORIGEN${RESET}"
+                    echo -e "${CIAN}---------------------------------------------${RESET}"
+                    echo "$escaneres" | awk '{printf "  %-16s |   %s\n", $1, $2}'
+                    echo -e "${CIAN}---------------------------------------------${RESET}"
+                    
+                    echo -ne "\n${AMARILLO}¿Desea bloquear permanentemente alguna de estas IPs? (s/N): ${RESET}"
+                    read -r bloq_conf
+                    if [[ "$bloq_conf" =~ ^[sS]$ ]]; then
+                        echo -ne "${AMARILLO}Ingrese la IP a bloquear: ${RESET}"
+                        read -r ip_block
+                        if [ -n "$ip_block" ]; then
+                            ufw deny from "$ip_block"
+                            registrar_log "$LOG_WARN" "IP Sospechosa bloqueada tras auditoría: $ip_block"
+                            pintar "$VERDE_BRILLANTE" "✔ Regla de bloqueo absoluto aplicada a $ip_block"
+                        fi
+                    fi
+                fi
+                read -p "Presione Enter para continuar..."
+                ;;
+
+            3)
+                clear
+                mostrar_logo_stop4me
+                pintar "$CIAN" "--- CONFIGURAR NIVEL DE REGISTRO (LOGGING) DE UFW ---"
+                echo -e "${AZUL}Seleccione la intensidad de eventos que UFW registrará en el sistema:${RESET}\n"
+
+                local opt_log="1. 🔴 off (Desactivar registro)\n2. 🟢 low (Básico: registra paquetes bloqueados - Recomendado)\n3. 🟡 medium (Medio: incluye paquetes rechazados e invalidos)\n4. 🟠 high (Alto: registra todos los paquetes con limitación)\n5. ↩ Volver"
+                local sel_lvl
+                sel_lvl=$(echo -e "$opt_log" | fzf_estilo "Nivel Logging" "CONFIGURACIÓN UFW LOGGING")
+
+                case ${sel_lvl:0:1} in
+                    1) ufw logging off ;;
+                    2) ufw logging low ;;
+                    3) ufw logging medium ;;
+                    4) ufw logging high ;;
+                    *) continue ;;
+                esac
+                
+                registrar_log "$LOG_INFO" "Nivel de logging de UFW cambiado."
+                pintar "$VERDE_BRILLANTE" "✔ Nivel de registro actualizado."
+                read -p "Presione Enter para continuar..."
+                ;;
+
+            4)
+                gestionar_logs_script
+                ;;
+
+            *)
+                break
+                ;;
+        esac
+    done
+}
+
+# --- BITÁCORA INTERNA DE MANTENIMIENTO ---
+gestionar_logs_script() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$MAGENTA" "--- AUDITORÍA DE BITÁCORA DE ACCIONES (stk_mantenimiento.log) ---"
+
+    if [ ! -f "$LOG_FILE" ]; then
+        pintar "$ROJO" "❌ No se encontró el archivo de logs ($LOG_FILE)."
+        read -p "Presione Enter para volver..."
+        return
+    fi
+
+    local filtro_opt="1. 📋 Ver todos los logs\n2. 🟢 Filtrar por INFO\n3. 🟡 Filtrar por ADVERTENCIAS (WARN)\n4. 🔴 Filtrar por ERRORES (ERROR)\n5. ↩ Volver"
+    local sel_filtro
+    sel_filtro=$(echo -e "$filtro_opt" | fzf_estilo "Filtro Log" "ACCIONES DEL SCRIPT")
+
+    local tipo_filtro=""
+    case ${sel_filtro:0:1} in
+        1) tipo_filtro="[STOP4ME]" ;;
+        2) tipo_filtro="[INFO]" ;;
+        3) tipo_filtro="[WARN]" ;;
+        4) tipo_filtro="[ERROR]" ;;
+        *) return ;;
+    esac
+
+    clear
+    pintar "$CIAN" "--- LOGS FILTRADOS POR: $tipo_filtro ---"
+    echo -e "${AZUL}Tip: Usa FZF para buscar términos dentro de los logs.${RESET}\n"
+
+    grep "STOP4ME" "$LOG_FILE" | grep "$tipo_filtro" | fzf --ansi \
+        --height=20 \
+        --reverse \
+        --border=rounded \
+        --prompt="🔍 Buscar evento: " \
+        --header="Pulsar ESC o 'Ctrl+C' para salir"
+
+    read -p "Presione Enter para continuar..."
+}
+
+# --- MENÚ PRINCIPAL STOP4ME ---
+stop4me_main_menu() {
+    if ! verificar_e_instalar_ufw; then
+        return
+    fi
+
+    while true; do
+        clear
+        mostrar_logo_stop4me
+
+        local opciones="1. 📊 Ver Estado Actual y Reglas Detalladas\n2. ⚡ Activar / Desactivar / Recargar UFW\n3. 🔌 Añadir Regla por Puerto o Servicio (ALLOW/DENY)\n4. 🌐 Gestionar Reglas por Dirección IP / Subred\n5. 🗑️ Eliminar una Regla Existente\n6. 🛡️ Auditoría de Tráfico de Red y Escaneos (Logs Cortafuegos)\n7. ⚠️ Restablecer Cortafuegos de Fábrica (Reset)\n8. ↩ Volver"
+        local seleccion
+        seleccion=$(echo -e "$opciones" | fzf_estilo "Selección" "S T O P 4 M E  -  U F W  M A N A G E R")
+
+        if [ $? -ne 0 ] || [ -z "$seleccion" ] || [[ "${seleccion:0:1}" == "8" ]]; then
+            salir_stop4me
+            break
+        fi
+
+        case ${seleccion:0:1} in
+            1) ver_estado_y_reglas ;;
+            2) gestionar_estado_ufw ;;
+            3) agregar_regla_puerto ;;
+            4) gestionar_regla_ip ;;
+            5) eliminar_regla ;;
+            6) analizar_trafico_red ;;
+            7) resetear_cortafuegos ;;
+        esac
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    stop4me_main_menu
+fi
