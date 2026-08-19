@@ -376,64 +376,93 @@ obtener_logs_trafico() {
     fi
 }
 
-# --- AUDITORÍA Y MONITOREO DE TRÁFICO Y ESCANEOS ---
+# --- AUDITORÍA AVANZADA DE TRÁFICO, ESCANEOS Y FUERZA BRUTA ---
 analizar_trafico_red() {
     while true; do
         clear
         mostrar_logo_stop4me
-        pintar "$MAGENTA" "--- AUDITORÍA DE TRÁFICO DE RED Y ESCANEOS ---"
+        pintar "$MAGENTA" "--- AUDITORÍA DE SEGURIDAD: TRÁFICO, ESCANEOS Y FUERZA BRUTA ---"
 
         local log_status
         log_status=$(ufw status verbose 2>/dev/null | grep "Logging:" | awk '{print $2}')
-        echo -e "${AMARILLO}➤ Estado del Registro de UFW (Logging):${RESET} ${AZUL}${log_status:-"desconocido"}${RESET}\n"
+        echo -e "${AMARILLO}➤ Nivel Logging UFW:${RESET} ${AZUL}${log_status:-"desconocido"}${RESET}\n"
 
-        local opciones_tr="1. 🛑 Ver Todo el Tráfico BLOQUEADO [BLOCK/BLOCK/DENY]\n2. 🔍 Detectar Posibles Escaneos de Puertos (IPs sospechosas)\n3. ⚙️ Cambiar Nivel de Registro de UFW (Logging Level)\n4. 📋 Consultar Bitácora Interna del Script (stk_mantenimiento.log)\n5. ↩ Volver"
+        local opciones_tr="1. 🛑 Ver Tráfico Bloqueado en Tiempo Real\n2. 🔍 Detectar Escaneos de Puertos (Múltiples puertos atacados)\n3. 🔐 Detectar Intentos de Fuerza Bruta (SSH / Servicios)\n4. ⚙️ Cambiar Nivel de Registro de UFW (Logging Level)\n5. 📋 Consultar Bitácora Interna (stk_mantenimiento.log)\n6. ↩ Volver"
         local sel_tr
-        sel_tr=$(echo -e "$opciones_tr" | fzf_estilo "Auditoría de Red" "SEGURIDAD DE RED Y ESCANEOS")
+        sel_tr=$(echo -e "$opciones_tr" | fzf_estilo "Centro de Seguridad" "DETECCIÓN DE AMENAZAS")
 
         case ${sel_tr:0:1} in
             1)
                 clear
-                pintar "$CIAN" "--- TRÁFICO RECHAZADO Y BLOQUEADO EN TIEMPO REAL ---"
-                echo -e "${AZUL}Usa FZF para filtrar por puerto (DPT=) o por IP de origen (SRC=)${RESET}\n"
+                pintar "$CIAN" "--- TRÁFICO BLOQUEADO REGISTRADO ---"
+                echo -e "${AZUL}Filtra en tiempo real por IP (SRC=) o Puerto (DPT=) usando FZF${RESET}\n"
                 
                 local datos_block
                 datos_block=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
 
                 if [ -z "$datos_block" ]; then
-                    pintar "$AMARILLO" "⚠️ No se registraron eventos de tráfico bloqueado recientemente."
-                    echo -e "${CIAN}Nota: Asegúrate de que el registro 'Logging' esté activado en nivel 'low' o 'medium'.${RESET}"
+                    pintar "$AMARILLO" "⚠️ No hay logs de tráfico bloqueado. Comprueba si 'Logging' está en 'low' o 'medium'."
                 else
-                    echo "$datos_block" | fzf --ansi --height=20 --reverse --border=rounded --prompt="🔍 Filtrar bloqueos: "
+                    echo "$datos_block" | fzf --ansi --height=20 --reverse --border=rounded --prompt="🔍 Buscar evento: "
                 fi
                 read -p "Presione Enter para continuar..."
                 ;;
 
             2)
                 clear
-                pintar "$ROJO_BRILLANTE" "--- DETECCIÓN DE POSIBLES ESCANEOS DE PUERTOS ---"
-                echo -e "${AZUL}IPs con múltiples intentos de conexión bloqueados recientemente:${RESET}\n"
+                pintar "$ROJO_BRILLANTE" "--- DETECTOR DE ESCANEOS DE PUERTOS (PORT SCAN) ---"
+                echo -e "${AZUL}Analizando IPs que impactaron múltiples puertos distintos...${RESET}\n"
 
-                local escaneres
-                escaneres=$(obtener_logs_trafico | grep -E "BLOCK|DENY" | grep -oE "SRC=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | cut -d'=' -f2 | sort | uniq -c | sort -nr)
-
-                if [ -z "$escaneres" ]; then
-                    pintar "$VERDE_BRILLANTE" "✔ No se han detectado patrones de escaneo de puertos en las bitácoras actuales."
+                # Extrae IPs y cuenta la cantidad de puertos UNICOS (DPT) que intentaron escanear
+                local raw_logs
+                raw_logs=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
+                
+                if [ -z "$raw_logs" ]; then
+                    pintar "$VERDE_BRILLANTE" "✔ No hay registros suficientes para analizar escaneos."
                 else
-                    echo -e "${ROJO}VECES BLOQUEADA   |   DIRECCIÓN IP DE ORIGEN${RESET}"
-                    echo -e "${CIAN}---------------------------------------------${RESET}"
-                    echo "$escaneres" | awk '{printf "  %-16s |   %s\n", $1, $2}'
-                    echo -e "${CIAN}---------------------------------------------${RESET}"
+                    echo -e "${ROJO}EVENTOS | PUERTOS UNICOS | IP ORIGEN${RESET}"
+                    echo -e "${CIAN}--------------------------------------------------${RESET}"
                     
-                    echo -ne "\n${AMARILLO}¿Desea bloquear permanentemente alguna de estas IPs? (s/N): ${RESET}"
-                    read -r bloq_conf
-                    if [[ "$bloq_conf" =~ ^[sS]$ ]]; then
-                        echo -ne "${AMARILLO}Ingrese la IP a bloquear: ${RESET}"
-                        read -r ip_block
-                        if [ -n "$ip_block" ]; then
-                            ufw deny from "$ip_block"
-                            registrar_log "$LOG_WARN" "IP Sospechosa bloqueada tras auditoría: $ip_block"
-                            pintar "$VERDE_BRILLANTE" "✔ Regla de bloqueo absoluto aplicada a $ip_block"
+                    # Genera reporte procesando SRC y DPT
+                    local reporte_escan
+                    reporte_escan=$(echo "$raw_logs" | awk '
+                        /SRC=/ && /DPT=/ {
+                            for(i=1;i<=NF;i++) {
+                                if($i ~ /^SRC=/) ip=substr($i,5)
+                                if($i ~ /^DPT=/) port=substr($i,5)
+                            }
+                            if(ip != "" && port != "") {
+                                count[ip]++
+                                ports[ip, port]=1
+                            }
+                        }
+                        END {
+                            for(ip in count) {
+                                unique=0
+                                for(k in ports) {
+                                    split(k, idx, SUBSEP)
+                                    if(idx[1] == ip) unique++
+                                }
+                                print count[ip], unique, ip
+                            }
+                        }' | sort -nr -k2)
+
+                    if [ -z "$reporte_escan" ]; then
+                        pintar "$VERDE_BRILLANTE" "✔ No se detectaron patrones de escaneo de puertos activos."
+                    else
+                        echo "$reporte_escan" | awk '{printf "  %-7s|   %-13s|   %s\n", $1, $2, $3}'
+                        echo -e "${CIAN}--------------------------------------------------${RESET}"
+                        
+                        echo -ne "\n${AMARILLO}¿Desea bloquear alguna IP detectada? (s/N): ${RESET}"
+                        read -r bloq_conf
+                        if [[ "$bloq_conf" =~ ^[sS]$ ]]; then
+                            echo -ne "${AMARILLO}Ingrese la IP a bloquear en UFW: ${RESET}"
+                            read -r ip_block
+                            if [ -n "$ip_block" ]; then
+                                ufw deny from "$ip_block"
+                                registrar_log "$LOG_WARN" "IP bloqueada tras detectar escaneo: $ip_block"
+                                pintar "$VERDE_BRILLANTE" "✔ Regla 'DENY' aplicada correctamente para $ip_block"
+                            fi
                         fi
                     fi
                 fi
@@ -442,11 +471,48 @@ analizar_trafico_red() {
 
             3)
                 clear
+                pintar "$ROJO_BRILLANTE" "--- DETECTOR DE INTENTOS DE FUERZA BRUTA (SSH / AUTH) ---"
+                echo -e "${AZUL}Buscando accesos fallidos en /var/log/auth.log y systemd journal...${RESET}\n"
+
+                local auth_logs=""
+                if [ -f /var/log/auth.log ]; then
+                    auth_logs=$(grep -E "Failed password|Invalid user" /var/log/auth.log 2>/dev/null)
+                elif command -v journalctl &>/dev/null; then
+                    auth_logs=$(journalctl -u ssh -u sshd --no-pager -n 2000 2>/dev/null | grep -E "Failed password|Invalid user")
+                fi
+
+                if [ -z "$auth_logs" ]; then
+                    pintar "$VERDE_BRILLANTE" "✔ No se encontraron intentos fallidos de autenticación recientes."
+                else
+                    echo -e "${ROJO}INTENTOS FALLIDOS | IP ATACANTE${RESET}"
+                    echo -e "${CIAN}--------------------------------------------------${RESET}"
+                    
+                    local bf_report
+                    bf_report=$(echo "$auth_logs" | grep -oE "from [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | awk '{print $2}' | sort | uniq -c | sort -nr)
+                    
+                    echo "$bf_report" | awk '{printf "  %-16s|   %s\n", $1, $2}'
+                    echo -e "${CIAN}--------------------------------------------------${RESET}"
+
+                    echo -ne "\n${AMARILLO}¿Desea bloquear permanentemente una IP agresora? (s/N): ${RESET}"
+                    read -r bloq_bf
+                    if [[ "$bloq_bf" =~ ^[sS]$ ]]; then
+                        echo -ne "${AMARILLO}Ingrese la IP a aplicar DENY: ${RESET}"
+                        read -r ip_bf
+                        if [ -n "$ip_bf" ]; then
+                            ufw deny from "$ip_bf"
+                            registrar_log "$LOG_WARN" "IP Bloqueada por Fuerza Bruta: $ip_bf"
+                            pintar "$VERDE_BRILLANTE" "✔ IP $ip_bf bloqueada en el cortafuegos."
+                        fi
+                    fi
+                fi
+                read -p "Presione Enter para continuar..."
+                ;;
+
+            4)
+                clear
                 mostrar_logo_stop4me
                 pintar "$CIAN" "--- CONFIGURAR NIVEL DE REGISTRO (LOGGING) DE UFW ---"
-                echo -e "${AZUL}Seleccione la intensidad de eventos que UFW registrará en el sistema:${RESET}\n"
-
-                local opt_log="1. 🔴 off (Desactivar registro)\n2. 🟢 low (Básico: registra paquetes bloqueados - Recomendado)\n3. 🟡 medium (Medio: incluye paquetes rechazados e invalidos)\n4. 🟠 high (Alto: registra todos los paquetes con limitación)\n5. ↩ Volver"
+                local opt_log="1. 🔴 off (Desactivar registro)\n2. 🟢 low (Básico: registra paquetes bloqueados - Recomendado)\n3. 🟡 medium (Medio: incluye paquetes rechazados e inválidos)\n4. 🟠 high (Alto: registra todos los paquetes con limitación)\n5. ↩ Volver"
                 local sel_lvl
                 sel_lvl=$(echo -e "$opt_log" | fzf_estilo "Nivel Logging" "CONFIGURACIÓN UFW LOGGING")
 
@@ -463,17 +529,11 @@ analizar_trafico_red() {
                 read -p "Presione Enter para continuar..."
                 ;;
 
-            4)
-                gestionar_logs_script
-                ;;
-
-            *)
-                break
-                ;;
+            5) gestionar_logs_script ;;
+            *) break ;;
         esac
     done
 }
-
 # --- BITÁCORA INTERNA DE MANTENIMIENTO ---
 gestionar_logs_script() {
     clear
