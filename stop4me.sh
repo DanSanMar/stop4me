@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- INFORMACIÓN DEL MÓDULO ---
-V="1.3.0"
+V="1.3.1"
 DESCRIPCION="Gestión y Configuración de Cortafuegos UFW para Linux"
 AUTOR="DanSanMar"
 
@@ -377,17 +377,18 @@ obtener_logs_trafico() {
 }
 
 # --- AUDITORÍA AVANZADA DE TRÁFICO, ESCANEOS Y FUERZA BRUTA ---
+# --- AUDITORÍA AVANZADA DE TRÁFICO, ESCANEOS Y REPORTES ---
 analizar_trafico_red() {
     while true; do
         clear
         mostrar_logo_stop4me
-        pintar "$MAGENTA" "--- AUDITORÍA DE SEGURIDAD: TRÁFICO, ESCANEOS Y FUERZA BRUTA ---"
+        pintar "$MAGENTA" "--- AUDITORÍA DE SEGURIDAD, ESCANEOS E INFORMES ---"
 
         local log_status
         log_status=$(ufw status verbose 2>/dev/null | grep "Logging:" | awk '{print $2}')
         echo -e "${AMARILLO}➤ Nivel Logging UFW:${RESET} ${AZUL}${log_status:-"desconocido"}${RESET}\n"
 
-        local opciones_tr="1. 🛑 Ver Tráfico Bloqueado en Tiempo Real\n2. 🔍 Detectar Escaneos de Puertos (Múltiples puertos atacados)\n3. 🔐 Detectar Intentos de Fuerza Bruta (SSH / Servicios)\n4. ⚙️ Cambiar Nivel de Registro de UFW (Logging Level)\n5. 📋 Consultar Bitácora Interna (stk_mantenimiento.log)\n6. ↩ Volver"
+        local opciones_tr="1. 🛑 Ver Tráfico Bloqueado en Tiempo Real\n2. 🔍 Detectar Escaneos de Puertos (Múltiples puertos atacados)\n3. 🔐 Detectar Intentos de Fuerza Bruta (SSH / Auth)\n4. 📊 Generar Inspector e Informe de IPs Bloqueadas\n5. ⚙️ Cambiar Nivel de Registro de UFW (Logging Level)\n6. 📋 Consultar Bitácora Interna (stk_mantenimiento.log)\n7. ↩ Volver"
         local sel_tr
         sel_tr=$(echo -e "$opciones_tr" | fzf_estilo "Centro de Seguridad" "DETECCIÓN DE AMENAZAS")
 
@@ -401,7 +402,7 @@ analizar_trafico_red() {
                 datos_block=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
 
                 if [ -z "$datos_block" ]; then
-                    pintar "$AMARILLO" "⚠️ No hay logs de tráfico bloqueado. Comprueba si 'Logging' está en 'low' o 'medium'."
+                    pintar "$AMARILLO" "⚠️ No hay logs de tráfico bloqueado. Comprueba si 'Logging' está activado."
                 else
                     echo "$datos_block" | fzf --ansi --height=20 --reverse --border=rounded --prompt="🔍 Buscar evento: "
                 fi
@@ -413,7 +414,6 @@ analizar_trafico_red() {
                 pintar "$ROJO_BRILLANTE" "--- DETECTOR DE ESCANEOS DE PUERTOS (PORT SCAN) ---"
                 echo -e "${AZUL}Analizando IPs que impactaron múltiples puertos distintos...${RESET}\n"
 
-                # Extrae IPs y cuenta la cantidad de puertos UNICOS (DPT) que intentaron escanear
                 local raw_logs
                 raw_logs=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
                 
@@ -423,7 +423,6 @@ analizar_trafico_red() {
                     echo -e "${ROJO}EVENTOS | PUERTOS UNICOS | IP ORIGEN${RESET}"
                     echo -e "${CIAN}--------------------------------------------------${RESET}"
                     
-                    # Genera reporte procesando SRC y DPT
                     local reporte_escan
                     reporte_escan=$(echo "$raw_logs" | awk '
                         /SRC=/ && /DPT=/ {
@@ -510,6 +509,100 @@ analizar_trafico_red() {
 
             4)
                 clear
+                pintar "$MAGENTA" "--- INSPECTOR E INFORME DE IPS BLOQUEADAS ---"
+                
+                local raw_blocks
+                raw_blocks=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
+
+                if [ -z "$raw_blocks" ]; then
+                    pintar "$AMARILLO" "⚠️ No se han encontrado registros de tráfico bloqueado."
+                    read -p "Presione Enter para volver..."
+                    continue
+                fi
+
+                # Extrae lista resumida de IPs con recuento e metadatos rápidos
+                local lista_ips
+                lista_ips=$(echo "$raw_blocks" | awk '
+                    /SRC=/ {
+                        for(i=1;i<=NF;i++) {
+                            if($i ~ /^SRC=/) ip=substr($i,5)
+                            if($i ~ /^PROTO=/) proto[ip]=$i
+                        }
+                        if(ip != "") count[ip]++
+                    }
+                    END {
+                        for(i in count) {
+                            printf "IP: %-15s | Bloqueos: %-5d | Último Proto: %s\n", i, count[i], proto[i]
+                        }
+                    }' | sort -k4 -nr)
+
+                if [ -z "$lista_ips" ]; then
+                    pintar "$AMARILLO" "No se pudieron procesar las direcciones IP de los registros."
+                    read -p "Presione Enter para volver..."
+                    continue
+                fi
+
+                # Selección de IP mediante FZF
+                local seleccion_ip
+                seleccion_ip=$(echo "$lista_ips" | fzf_estilo "Seleccionar IP para Informe" "INSPECTOR DE BLOQUEOS POR IP")
+
+                if [ -n "$seleccion_ip" ]; then
+                    local target_ip
+                    target_ip=$(echo "$seleccion_ip" | awk '{print $2}')
+
+                    clear
+                    pintar "$CIAN" "========================================================================="
+                    pintar "$VERDE_BRILLANTE" "             INFORME DETALLADO DE BLOQUEOS: $target_ip"
+                    pintar "$CIAN" "========================================================================="
+
+                    local logs_ip
+                    logs_ip=$(echo "$raw_blocks" | grep "SRC=$target_ip")
+
+                    # Estadísticas de la IP
+                    local total_intentos
+                    total_intentos=$(echo "$logs_ip" | wc -l)
+                    local primer_visto
+                    primer_visto=$(echo "$logs_ip" | head -n 1 | awk '{print $1, $2, $3}')
+                    local ultimo_visto
+                    ultimo_visto=$(echo "$logs_ip" | tail -n 1 | awk '{print $1, $2, $3}')
+                    local puertos_destino
+                    puertos_destino=$(echo "$logs_ip" | grep -oE "DPT=[0-9]+" | cut -d'=' -f2 | sort -u | tr '\n' ' ')
+                    local protocolos
+                    protocolos=$(echo "$logs_ip" | grep -oE "PROTO=[A-Z]+" | cut -d'=' -f2 | sort -u | tr '\n' ' ')
+
+                    echo -e "${AMARILLO}➤ Total de Impactos Bloqueados:${RESET} ${VERDE_BRILLANTE}$total_intentos${RESET}"
+                    echo -e "${AMARILLO}➤ Primer evento registrado:${RESET}     ${AZUL}${primer_visto:-"N/A"}${RESET}"
+                    echo -e "${AMARILLO}➤ Último evento registrado:${RESET}     ${AZUL}${ultimo_visto:-"N/A"}${RESET}"
+                    echo -e "${AMARILLO}➤ Protocolos usados:${RESET}            ${CIAN}$protocolos${RESET}"
+                    echo -e "${AMARILLO}➤ Puertos atacados (DPT):${RESET}       ${ROJO_BRILLANTE}$puertos_destino${RESET}"
+                    echo -e "${CIAN}-------------------------------------------------------------------------${RESET}"
+                    echo -e "${AZUL}HISTORIAL CRONOLÓGICO DE EVENTOS DE $target_ip:${RESET}\n"
+
+                    # Formateo visual del registro de eventos
+                    echo "$logs_ip" | awk '{
+                        fecha=$1" "$2" "$3
+                        for(i=1;i<=NF;i++) {
+                            if($i ~ /^IN=/) iface=substr($i,4)
+                            if($i ~ /^PROTO=/) proto=substr($i,7)
+                            if($i ~ /^SPT=/) sport=substr($i,5)
+                            if($i ~ /^DPT=/) dport=substr($i,5)
+                        }
+                        printf " 🕒 \033[36m%-15s\033[0m | Interfaz: \033[33m%-6s\033[0m | Proto: \033[35m%-4s\033[0m | Origen: %-5s -> \033[91mDestino: %-5s\033[0m\n", fecha, iface, proto, sport, dport
+                    }' | fzf --ansi --height=15 --reverse --border=rounded --prompt="🔍 Filtrar timeline: "
+
+                    echo -ne "\n${AMARILLO}¿Desea aplicar un bloqueo 'DENY' permanente a $target_ip? (s/N): ${RESET}"
+                    read -r conf_den
+                    if [[ "$conf_den" =~ ^[sS]$ ]]; then
+                        ufw deny from "$target_ip"
+                        registrar_log "$LOG_WARN" "IP bloqueada mediante informe interactivo: $target_ip"
+                        pintar "$VERDE_BRILLANTE" "✔ Regla de bloqueo absoluto aplicada a $target_ip"
+                    fi
+                fi
+                read -p "Presione Enter para continuar..."
+                ;;
+
+            5)
+                clear
                 mostrar_logo_stop4me
                 pintar "$CIAN" "--- CONFIGURAR NIVEL DE REGISTRO (LOGGING) DE UFW ---"
                 local opt_log="1. 🔴 off (Desactivar registro)\n2. 🟢 low (Básico: registra paquetes bloqueados - Recomendado)\n3. 🟡 medium (Medio: incluye paquetes rechazados e inválidos)\n4. 🟠 high (Alto: registra todos los paquetes con limitación)\n5. ↩ Volver"
@@ -529,7 +622,7 @@ analizar_trafico_red() {
                 read -p "Presione Enter para continuar..."
                 ;;
 
-            5) gestionar_logs_script ;;
+            6) gestionar_logs_script ;;
             *) break ;;
         esac
     done
