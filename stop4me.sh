@@ -163,6 +163,29 @@ verificar_e_instalar_ufw() {
 
 # --- FUNCIONES DE CONTROL UFW ---
 
+gestionar_reglas_menu() {
+    while true; do
+        clear
+        mostrar_logo_stop4me
+        pintar "$MAGENTA" "--- 🔒 GESTIÓN Y CREACIÓN DE REGLAS ---"
+
+        local opciones1="1. 🛡️ Reglas por puertos\n2. 🌐 Reglas por IP\n3. ❌ Eliminar reglas\n4. ⬅️ Volver"
+        local seleccion1
+        seleccion1=$(echo -e "$opciones1" | fzf_estilo "Selección" "S T O P 4 M E  -  R U L E S  M A N A G E R")
+
+        if [ $? -ne 0 ] || [ -z "$seleccion1" ] || [[ "${seleccion1:0:1}" == "4" ]]; then
+            stop4me_main_menu
+            continue
+        fi
+
+        case ${seleccion1:0:1} in
+            1) agregar_regla_puerto ;;
+            2) gestionar_regla_ip ;;
+            3) eliminar_regla ;; 
+        esac
+    done
+    }
+
 gestionar_estado_ufw() {
     clear
     mostrar_logo_stop4me
@@ -702,7 +725,7 @@ stop4me_main_menu() {
         clear
         mostrar_logo_stop4me
 
-        local opciones="1. ⚡ Estado / Activar / Desactivar / Recargar UFW\n3. 🔌 Añadir Regla por Puerto o Servicio (ALLOW/DENY)\n4. 🌐 Gestionar Reglas por Dirección IP / Subred\n5. 🗑️ Eliminar una Regla Existente\n6. 🛡️ Auditoría de Tráfico de Red y Escaneos (Logs Cortafuegos)\n7. ⚠️ Restablecer Cortafuegos de Fábrica (Reset)\n8. ↩ Volver"
+        local opciones="1. ⚡ Estado / Activar / Desactivar / Recargar UFW\n2. 🔌 Gestión de Reglas por Puerto o Servicio o IP (ALLOW/DENY)\n3. 🛡️ Control de Tráfico de Red y Auditoria de Eventos\n4. ⚠️ Restablecer Cortafuegos de Fábrica (Reset)\n5. ↩ Volver"
         local seleccion
         seleccion=$(echo -e "$opciones" | fzf_estilo "Selección" "S T O P 4 M E  -  U F W  M A N A G E R")
 
@@ -714,11 +737,9 @@ stop4me_main_menu() {
         case ${seleccion:0:1} in
             
             1) gestionar_estado_ufw ;;
-            2) agregar_regla_puerto ;;
-            4) gestionar_regla_ip ;;
-            5) eliminar_regla ;;
-            6) analizar_trafico_red ;;
-            7) resetear_cortafuegos ;;
+            2) gestionar_reglas_menu ;;
+            3) analizar_trafico_red ;;
+            4) resetear_cortafuegos ;;
         esac
     done
 }
