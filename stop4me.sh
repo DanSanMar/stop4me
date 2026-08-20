@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- INFORMACIÓN DEL MÓDULO ---
-V="1.3.3"
+V="1.3.4"
 DESCRIPCION="Instalación, Gestión y Configuración de Cortafuegos UFW para Linux"
 AUTOR="DanSanMar"
 
@@ -173,7 +173,7 @@ gestionar_estado_ufw() {
 
     local opciones=""
     if [[ "$st_ufw" == *"active"* ]] && [[ "$st_ufw" != *"inactive"* ]]; then
-        opciones="1. 🛑 Desactivar Cortafuegos (Disable)\n2. 🔄 Reiniciar Cortafuegos (Reload)\n3. ↩ Volver"
+        opciones="0. 📊 Ver Estado Actual y Reglas Detalladas\n1. 🛑 Desactivar Cortafuegos (Disable)\n2. 🔄 Reiniciar Cortafuegos (Reload)\n3. ↩ Volver"
     else
         opciones="1. 🛡️ Activar Cortafuegos (Enable)\n2. ↩ Volver"
     fi
@@ -182,6 +182,8 @@ gestionar_estado_ufw() {
     sel=$(echo -e "$opciones" | fzf_estilo "Acción de Estado" "ESTADO DE UFW")
 
     case ${sel:0:1} in
+        0) ver_estado_y_reglas
+            ;;
         1)
             if [[ "$st_ufw" == *"active"* ]] && [[ "$st_ufw" != *"inactive"* ]]; then
                 ufw --force disable
@@ -700,7 +702,7 @@ stop4me_main_menu() {
         clear
         mostrar_logo_stop4me
 
-        local opciones="1. 📊 Ver Estado Actual y Reglas Detalladas\n2. ⚡ Activar / Desactivar / Recargar UFW\n3. 🔌 Añadir Regla por Puerto o Servicio (ALLOW/DENY)\n4. 🌐 Gestionar Reglas por Dirección IP / Subred\n5. 🗑️ Eliminar una Regla Existente\n6. 🛡️ Auditoría de Tráfico de Red y Escaneos (Logs Cortafuegos)\n7. ⚠️ Restablecer Cortafuegos de Fábrica (Reset)\n8. ↩ Volver"
+        local opciones="1. ⚡ Estado / Activar / Desactivar / Recargar UFW\n3. 🔌 Añadir Regla por Puerto o Servicio (ALLOW/DENY)\n4. 🌐 Gestionar Reglas por Dirección IP / Subred\n5. 🗑️ Eliminar una Regla Existente\n6. 🛡️ Auditoría de Tráfico de Red y Escaneos (Logs Cortafuegos)\n7. ⚠️ Restablecer Cortafuegos de Fábrica (Reset)\n8. ↩ Volver"
         local seleccion
         seleccion=$(echo -e "$opciones" | fzf_estilo "Selección" "S T O P 4 M E  -  U F W  M A N A G E R")
 
@@ -710,9 +712,9 @@ stop4me_main_menu() {
         fi
 
         case ${seleccion:0:1} in
-            1) ver_estado_y_reglas ;;
-            2) gestionar_estado_ufw ;;
-            3) agregar_regla_puerto ;;
+            
+            1) gestionar_estado_ufw ;;
+            2) agregar_regla_puerto ;;
             4) gestionar_regla_ip ;;
             5) eliminar_regla ;;
             6) analizar_trafico_red ;;
