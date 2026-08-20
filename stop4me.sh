@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- INFORMACIÓN DEL MÓDULO ---
-V="1.3.4"
+V="1.4.1"
 DESCRIPCION="Instalación, Gestión y Configuración de Cortafuegos UFW para Linux"
 AUTOR="DanSanMar"
 
@@ -163,29 +163,170 @@ verificar_e_instalar_ufw() {
 
 # --- FUNCIONES DE CONTROL UFW ---
 
+# ==============================================================================
+# --- GESTIÓN UNIFICADA DE REGLAS (UFW + FZF) ---
+# ==============================================================================
+
 gestionar_reglas_menu() {
     while true; do
         clear
         mostrar_logo_stop4me
-        pintar "$MAGENTA" "--- 🔒 GESTIÓN Y CREACIÓN DE REGLAS ---"
+        pintar "$MAGENTA" "--- 🔒 GESTIÓN INTERACTIVA DE REGLAS UFW ---"
 
-        local opciones1="1. 🛡️ Reglas por puertos\n2. 🌐 Reglas por IP\n3. ❌ Eliminar reglas\n4. ⬅️ Volver"
-        local seleccion1
-        seleccion1=$(echo -e "$opciones1" | fzf_estilo "Selección" "S T O P 4 M E  -  R U L E S  M A N A G E R")
+        # 1. Obtención y formateo limpio de reglas activas
+        local raw_rules
+        raw_rules=$(ufw status numbered 2>/dev/null | grep -E '^\[ *[0-9]+\]')
 
-        if [ $? -ne 0 ] || [ -z "$seleccion1" ] || [[ "${seleccion1:0:1}" == "4" ]]; then
-            stop4me_main_menu
-            continue
+        # 2. Construcción de la lista para FZF
+        local fzf_input="[+] ➕ AÑADIR NUEVA REGLA (Puerto / IP / Servicio)\n"
+        if [ -n "$raw_rules" ]; then
+            fzf_input+="$raw_rules"
+        else
+            fzf_input+="    (No hay reglas activas registradas)"
         fi
 
-        case ${seleccion1:0:1} in
-            1) agregar_regla_puerto ;;
-            2) gestionar_regla_ip ;;
-            3) eliminar_regla ;; 
-        esac
-    done
-    }
+        # 3. Menú interactivo principal
+        local sel_regla
+        sel_regla=$(echo -e "$fzf_input" | fzf --ansi \
+            --height=18 \
+            --reverse \
+            --border=rounded \
+            --prompt="🎯 Seleccione regla o acción: " \
+            --header="REGLAS ACTIVAS EN UFW (Seleccione para gestionar o eliminar)")
 
+        # Cancelación o salida con ESC
+        [ -z "$sel_regla" ] && break
+
+        # 4. Enrutamiento de acción según selección
+        if [[ "$sel_regla" == *"[+] ➕"* ]]; then
+            agregar_regla_unificada
+        elif [[ "$sel_regla" =~ \[[[:space:]]*([0-9]+)\] ]]; then
+            # Extracción limpia del número de regla (maneja alineaciones [ 1] y [10])
+            local num_regla="${BASH_REMATCH[1]}"
+            gestionar_regla_existente "$num_regla" "$sel_regla"
+        fi
+    done
+}
+
+# --- AÑADIR REGLA (PUERTO, IP O COMBINADO) ---
+agregar_regla_unificada() {
+    clear
+    mostrar_logo_stop4me
+    pintar "$CIAN" "--- ➕ CREAR NUEVA REGLA DE FILTRADO ---"
+
+    # Seleccionar Acción
+    local opt_accion="1. 🟢 ALLOW (Permitir)\n2. 🔴 DENY (Bloquear/Denegar)\n3. 🚫 REJECT (Rechazar con respuesta)"
+    local sel_acc
+    sel_acc=$(echo -e "$opt_accion" | fzf_estilo "Acción" "TIPO DE POLÍTICA")
+    [ -z "$sel_acc" ] && return
+
+    local accion=""
+    case ${sel_acc:0:1} in
+        1) accion="allow" ;;
+        2) accion="deny" ;;
+        3) accion="reject" ;;
+        *) return ;;
+    esac
+
+    # Seleccionar Criterio
+    local opt_tipo="1. 🔌 Por Puerto / Servicio (ej: 80, 443/tcp, ssh)\n2. 🌐 Por Dirección IP / Subred (ej: 192.168.1.50, 10.0.0.0/24)\n3. 🎯 Por IP Y Puerto Específico"
+    local sel_tipo
+    sel_tipo=$(echo -e "$opt_tipo" | fzf_estilo "Criterio" "APLICAR REGLA POR:")
+    [ -z "$sel_tipo" ] && return
+
+    local cmd_args=()
+    local log_msg=""
+
+    case ${sel_tipo:0:1} in
+        1)
+            echo -ne "\n${AMARILLO}Ingrese el puerto/servicio (ej: 80, 443/tcp, ssh): ${RESET}"
+            read -r target
+            [ -z "$target" ] && { pintar "$ROJO" "⚠️ Valor vacío. Cancelado."; sleep 1.5; return; }
+            cmd_args=("$accion" "$target")
+            log_msg="Regla UFW añadida: $accion puerto/servicio $target"
+            ;;
+        2)
+            echo -ne "\n${AMARILLO}Ingrese IP o Subred (ej: 192.168.1.50 o 10.0.0.0/24): ${RESET}"
+            read -r target
+            [ -z "$target" ] && { pintar "$ROJO" "⚠️ Valor vacío. Cancelado."; sleep 1.5; return; }
+            cmd_args=("$accion" "from" "$target")
+            log_msg="Regla UFW añadida: $accion origen $target"
+            ;;
+        3)
+            echo -ne "\n${AMARILLO}Ingrese la IP de Origen: ${RESET}"
+            read -r ip_src
+            echo -ne "${AMARILLO}Ingrese el Puerto de Destino: ${RESET}"
+            read -r port_dst
+            if [ -z "$ip_src" ] || [ -z "$port_dst" ]; then
+                pintar "$ROJO" "⚠️ Se requieren ambos datos. Cancelado."
+                sleep 1.5; return
+            fi
+            cmd_args=("$accion" "from" "$ip_src" "to" "any" "port" "$port_dst")
+            log_msg="Regla UFW añadida: $accion IP $ip_src hacia puerto $port_dst"
+            ;;
+        *) return ;;
+    esac
+
+    # Ejecución segura mediante array
+    echo -e "\n${AZUL}🔄 Aplicando: ${AMARILLO}ufw ${cmd_args[*]}${RESET}"
+    if ufw "${cmd_args[@]}"; then
+        pintar "$VERDE_BRILLANTE" "✔ Regla aplicada con éxito."
+        registrar_log "$LOG_INFO" "$log_msg"
+    else
+        pintar "$ROJO" "❌ Error al intentar aplicar la regla en UFW."
+        registrar_log "$LOG_ERR" "Error ejecutando: ufw ${cmd_args[*]}"
+    fi
+    read -p "Presione Enter para continuar..."
+}
+
+# --- SUBMENÚ PARA REGLA SELECCIONADA ---
+gestionar_regla_existente() {
+    local num_regla="$1"
+    local detalle_regla="$2"
+
+    local opciones="1. ❌ Eliminar esta regla (#$num_regla)\n2. 📥 Insertar regla antes de esta (#$num_regla)\n3. ↩ Volver"
+    local sel
+    sel=$(echo -e "$opciones" | fzf_estilo "Acción" "REGLA SELECCIONADA: $detalle_regla")
+
+    case ${sel:0:1} in
+        1)
+            echo -ne "\n${ROJO_BRILLANTE}⚠️ ¿Confirmar eliminación de la regla #$num_regla? (s/N): ${RESET}"
+            read -r conf
+            if [[ "$conf" =~ ^[sS]$ ]]; then
+                if ufw --force delete "$num_regla"; then
+                    pintar "$VERDE_BRILLANTE" "✔ Regla #$num_regla eliminada con éxito."
+                    registrar_log "$LOG_WARN" "Regla UFW #$num_regla eliminada."
+                else
+                    pintar "$ROJO" "❌ Fallo al eliminar la regla."
+                fi
+            else
+                pintar "$AZUL" "Operación cancelada."
+            fi
+            sleep 1.5
+            ;;
+        2)
+            echo -ne "\n${AMARILLO}Ingrese la acción (allow/deny): ${RESET}"
+            read -r acc_ins
+            echo -ne "${AMARILLO}Ingrese la regla (ej: 80/tcp o from 192.168.1.1): ${RESET}"
+            read -r rule_ins
+
+            if [ -n "$acc_ins" ] && [ -n "$rule_ins" ]; then
+                # Construcción y parseo seguro de argumentos
+                read -r -a extra_args <<< "$rule_ins"
+                if ufw insert "$num_regla" "$acc_ins" "${extra_args[@]}"; then
+                    pintar "$VERDE_BRILLANTE" "✔ Regla insertada correctamente en la posición #$num_regla."
+                    registrar_log "$LOG_INFO" "Regla insertada en pos #$num_regla: $acc_ins $rule_ins"
+                else
+                    pintar "$ROJO" "❌ Error al insertar la regla en UFW."
+                fi
+            else
+                pintar "$ROJO" "⚠️ Datos incompletos."
+            fi
+            read -p "Presione Enter para continuar..."
+            ;;
+    esac
+}
+# Gestión estado UFW
 gestionar_estado_ufw() {
     clear
     mostrar_logo_stop4me
