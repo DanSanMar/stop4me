@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- INFORMACIÓN DEL MÓDULO ---
-V="1.4.1"
+V="1.5"
 DESCRIPCION="Instalación, Gestión y Configuración de Cortafuegos UFW para Linux"
 AUTOR="DanSanMar"
 
@@ -187,12 +187,7 @@ gestionar_reglas_menu() {
 
         # 3. Menú interactivo principal
         local sel_regla
-        sel_regla=$(echo -e "$fzf_input" | fzf --ansi \
-            --height=18 \
-            --reverse \
-            --border=rounded \
-            --prompt="🎯 Seleccione regla o acción: " \
-            --header="REGLAS ACTIVAS EN UFW (Seleccione para gestionar o eliminar)")
+        sel_regla=$(echo -e "$fzf_input" | fzf_estilo "Seleccione regla o acción" "REGLAS ACTIVAS EN UFW (Seleccione para gestionar o eliminar)")
 
         # Cancelación o salida con ESC
         [ -z "$sel_regla" ] && break
@@ -389,120 +384,6 @@ ver_estado_y_reglas() {
     read -p "Presione Enter para volver..."
 }
 
-agregar_regla_puerto() {
-    clear
-    mostrar_logo_stop4me
-    pintar "$CIAN" "--- AÑADIR REGLA POR PUERTO / SERVICIO ---"
-
-    echo -ne "\n${AMARILLO}Ingrese el puerto o servicio (ej: 80, 443, 22/tcp, ssh): ${RESET}"
-    read -r puerto
-
-    if [[ -z "$puerto" ]]; then
-        pintar "$ROJO" "⚠️ El puerto no puede estar vacío."
-        sleep 1.5; return
-    fi
-
-    local accion_opt="1. 🟢 Permitir Tráfico (ALLOW)\n2. 🔴 Denegar Tráfico (DENY)\n3. 🚫 Rechazar Tráfico (REJECT)"
-    local sel_acc
-    sel_acc=$(echo -e "$accion_opt" | fzf_estilo "Acción" "POLÍTICA PARA PUERTO $puerto")
-
-    local tipo_acc=""
-    case ${sel_acc:0:1} in
-        1) tipo_acc="allow" ;;
-        2) tipo_acc="deny" ;;
-        3) tipo_acc="reject" ;;
-        *) return ;;
-    esac
-
-    echo -e "\n${AZUL}🔄 Aplicando regla UFW...${RESET}"
-    if ufw $tipo_acc "$puerto"; then
-        pintar "$VERDE_BRILLANTE" "✔ Regla añadida correctamente: $puerto ($tipo_acc)"
-        registrar_log "$LOG_INFO" "Regla UFW añadida: $tipo_acc $puerto"
-    else
-        pintar "$ROJO" "❌ Error al intentar añadir la regla."
-        registrar_log "$LOG_ERR" "Error al añadir regla UFW: $tipo_acc $puerto"
-    fi
-
-    read -p "Presione Enter para continuar..."
-}
-
-gestionar_regla_ip() {
-    clear
-    mostrar_logo_stop4me
-    pintar "$CIAN" "--- GESTIÓN DE REGLAS POR DIRECCIÓN IP ---"
-
-    echo -ne "\n${AMARILLO}Ingrese IP o Subred (ej: 192.168.1.50 o 192.168.1.0/24): ${RESET}"
-    read -r ip_target
-
-    if [[ -z "$ip_target" ]]; then
-        pintar "$ROJO" "⚠️ La dirección IP no puede estar vacía."
-        sleep 1.5; return
-    fi
-
-    local accion_opt="1. 🟢 Permitir IP (ALLOW)\n2. 🔴 Bloquear/Denegar IP (DENY)\n3. 🎯 Permitir IP a Puerto Específico"
-    local sel_acc
-    sel_acc=$(echo -e "$accion_opt" | fzf_estilo "Acción" "POLÍTICA PARA IP $ip_target")
-
-    case ${sel_acc:0:1} in
-        1)
-            ufw allow from "$ip_target"
-            registrar_log "$LOG_INFO" "UFW: Permitido acceso a IP $ip_target"
-            ;;
-        2)
-            ufw deny from "$ip_target"
-            registrar_log "$LOG_WARN" "UFW: Bloqueada IP $ip_target"
-            ;;
-        3)
-            echo -ne "\n${AMARILLO}Ingrese el puerto de destino (ej: 22): ${RESET}"
-            read -r puerto_dest
-            if [ -n "$puerto_dest" ]; then
-                ufw allow from "$ip_target" to any port "$puerto_dest"
-                registrar_log "$LOG_INFO" "UFW: IP $ip_target permitida al puerto $puerto_dest"
-            fi
-            ;;
-        *) return ;;
-    esac
-
-    pintar "$VERDE_BRILLANTE" "✔ Regla de IP procesada con éxito."
-    read -p "Presione Enter para continuar..."
-}
-
-eliminar_regla() {
-    clear
-    mostrar_logo_stop4me
-    pintar "$CIAN" "--- ELIMINAR REGLA DE FILTRADO ---"
-
-    local reglas
-    reglas=$(ufw status numbered 2>/dev/null | grep -E '^\[ *[0-9]+\]')
-
-    if [ -z "$reglas" ]; then
-        pintar "$AMARILLO" "No hay reglas de cortafuegos registradas para eliminar."
-        read -p "Presione Enter para continuar..."
-        return
-    fi
-
-    local sel_regla
-    sel_regla=$(echo "$reglas" | fzf_estilo "Seleccionar regla" "ELIMINACIÓN DE REGLAS")
-
-    if [ -n "$sel_regla" ]; then
-        local num_regla
-        num_regla=$(echo "$sel_regla" | sed -n 's/^\[ *\([0-9]*\)\].*/\1/p')
-
-        if [ -n "$num_regla" ]; then
-            echo -ne "\n${ROJO_BRILLANTE}⚠️ ¿Confirmar eliminación de la regla #$num_regla? (s/N): ${RESET}"
-            read -r conf
-            if [[ "$conf" =~ ^[sS]$ ]]; then
-                ufw --force delete "$num_regla"
-                pintar "$VERDE" "✔ Regla #$num_regla eliminada con éxito."
-                registrar_log "$LOG_WARN" "Regla UFW #$num_regla eliminada."
-            else
-                pintar "$AZUL" "Operación cancelada."
-            fi
-            read -p "Presione Enter para continuar..."
-        fi
-    fi
-}
-
 resetear_cortafuegos() {
     clear
     mostrar_logo_stop4me
@@ -542,40 +423,9 @@ obtener_logs_trafico() {
     fi
 }
 
-# --- AUDITORÍA AVANZADA DE TRÁFICO, ESCANEOS E INFORMES EXHAUSTIVOS ---
-analizar_trafico_red() {
-    while true; do
+detectar_escaneo_puertos() {
         clear
         mostrar_logo_stop4me
-        pintar "$MAGENTA" "--- AUDITORÍA DE SEGURIDAD, ESCANEOS E INFORMES ---"
-
-        local log_status
-        log_status=$(ufw status verbose 2>/dev/null | grep "Logging:" | awk '{print $2}')
-        echo -e "${AMARILLO}➤ Nivel Logging UFW:${RESET} ${AZUL}${log_status:-"desconocido"}${RESET}\n"
-
-        local opciones_tr="1. 🛑 Ver Tráfico Bloqueado en Tiempo Real\n2. 🔍 Detectar Escaneos de Puertos (Múltiples puertos atacados)\n3. 🔐 Detectar Intentos de Fuerza Bruta (SSH / Auth)\n4. 📊 Generar Informe Forense e Inspector de IPs (Avanzado)\n5. ⚙️ Cambiar Nivel de Registro de UFW (Logging Level)\n6. 📋 Consultar Bitácora Interna (stk_mantenimiento.log)\n7. ↩ Volver"
-        local sel_tr
-        sel_tr=$(echo -e "$opciones_tr" | fzf_estilo "Centro de Seguridad" "DETECCIÓN DE AMENAZAS")
-
-        case ${sel_tr:0:1} in
-            1)
-                clear
-                pintar "$CIAN" "--- TRÁFICO BLOQUEADO REGISTRADO ---"
-                echo -e "${AZUL}Filtra en tiempo real por IP (SRC=) o Puerto (DPT=) usando FZF${RESET}\n"
-                
-                local datos_block
-                datos_block=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
-
-                if [ -z "$datos_block" ]; then
-                    pintar "$AMARILLO" "⚠️ No hay logs de tráfico bloqueado. Comprueba si 'Logging' está activado."
-                else
-                    echo "$datos_block" | fzf --ansi --height=20 --reverse --border=rounded --prompt="🔍 Buscar evento: "
-                fi
-                read -p "Presione Enter para continuar..."
-                ;;
-
-            2)
-                clear
                 pintar "$ROJO_BRILLANTE" "--- DETECTOR DE ESCANEOS DE PUERTOS (PORT SCAN) ---"
                 echo -e "${AZUL}Analizando IPs que impactaron múltiples puertos distintos...${RESET}\n"
 
@@ -631,10 +481,12 @@ analizar_trafico_red() {
                     fi
                 fi
                 read -p "Presione Enter para continuar..."
-                ;;
+                
+}
 
-            3)
-                clear
+detector_fuerza_bruta(){
+    clear
+    mostrar_logo_stop4me
                 pintar "$ROJO_BRILLANTE" "--- DETECTOR DE INTENTOS DE FUERZA BRUTA (SSH / AUTH) ---"
                 echo -e "${AZUL}Buscando accesos fallidos en /var/log/auth.log y systemd journal...${RESET}\n"
 
@@ -670,11 +522,13 @@ analizar_trafico_red() {
                     fi
                 fi
                 read -p "Presione Enter para continuar..."
-                ;;
+            
+}
 
-            4)
-                clear
-                pintar "$MAGENTA" "--- GENERADOR DE INFORME FORENSE Y AUDITORÍA DE IPS ---"
+informe_auditoria_seguridad(){
+    clear
+    mostrar_logo_stop4me
+                pintar "$MAGENTA" "--- GENERADOR DE INFORME DE AUDITORÍA DE SEGURIDAD---"
                 
                 local raw_blocks
                 raw_blocks=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
@@ -682,7 +536,7 @@ analizar_trafico_red() {
                 if [ -z "$raw_blocks" ]; then
                     pintar "$AMARILLO" "⚠️ No se han encontrado registros de tráfico bloqueado."
                     read -p "Presione Enter para volver..."
-                    continue
+                    return
                 fi
 
                 # Generar estructura resumida para la vista de selección
@@ -704,7 +558,7 @@ analizar_trafico_red() {
                 if [ -z "$lista_ips" ]; then
                     pintar "$AMARILLO" "No se pudieron extraer direcciones IP del log."
                     read -p "Presione Enter para volver..."
-                    continue
+                    return
                 fi
 
                 
@@ -748,7 +602,7 @@ analizar_trafico_red() {
 
                     # Renderizado del Informe en pantalla
                     echo -e "${CIAN}================================================================================${RESET}"
-                    echo -e "${VERDE_BRILLANTE}                  INFORME FORENSE DE AUDITORÍA: $target_ip${RESET}"
+                    echo -e "${VERDE_BRILLANTE}                  INFORME DE AUDITORÍA: $target_ip${RESET}"
                     echo -e "${CIAN}================================================================================${RESET}"
                     echo -e " 📌 ${AMARILLO}Dominio / Hostname:${RESET}  ${AZUL}${hostname_res}${RESET}"
                     echo -e " 📊 ${AMARILLO}Volumen de Impactos:${RESET} ${ROJO_BRILLANTE}${total_intentos} paquetes bloqueados${RESET}"
@@ -788,9 +642,50 @@ analizar_trafico_red() {
                     fi
                 fi
                 read -p "Presione Enter para continuar..."
+                
+}
+
+# --- AUDITORÍA AVANZADA DE TRÁFICO, ESCANEOS E INFORMES EXHAUSTIVOS ---
+analizar_trafico_red() {
+    while true; do
+        clear
+        mostrar_logo_stop4me
+        pintar "$MAGENTA" "--- AUDITORÍA DE SEGURIDAD, ESCANEOS E INFORMES ---"
+
+        local log_status
+        log_status=$(ufw status verbose 2>/dev/null | grep -i "Logging:" | sed -n 's/.*Logging:[[:space:]]*//p')
+        echo -e "${AMARILLO}➤ Nivel Logging UFW:${RESET} ${AZUL}${log_status:-"desconocido"}${RESET}\n"
+
+        local opciones_tr="1. 🛑 Tráfico Bloqueado en Tiempo Real\n2. 📊 Auditoria de Seguridad de Logs\n3. ⚙️ Nivel de Registro de UFW\n4. 📋 Bitácora Interna de Gestión\n5. ↩ Volver"
+        local sel_tr
+        sel_tr=$(echo -e "$opciones_tr" | fzf_estilo "Centro de Seguridad" "DETECCIÓN DE AMENAZAS")
+
+        case ${sel_tr:0:1} in
+            1)
+                clear
+                pintar "$CIAN" "--- TRÁFICO BLOQUEADO REGISTRADO ---"
+                echo -e "${AZUL}Filtra en tiempo real por IP (SRC=) o Puerto (DPT=) usando FZF${RESET}\n"
+                
+                local datos_block
+                datos_block=$(obtener_logs_trafico | grep -E "BLOCK|DENY")
+
+                if [ -z "$datos_block" ]; then
+                    pintar "$AMARILLO" "⚠️ No hay logs de tráfico bloqueado. Comprueba si 'Logging' está activado."
+                else
+                    echo "$datos_block" | fzf --ansi --height=20 --reverse --border=rounded --prompt="🔍 Buscar evento: "
+                fi
+                read -p "Presione Enter para continuar..."
                 ;;
 
-            5)
+            2)
+                
+                detectar_escaneo_puertos
+                detector_fuerza_bruta
+                informe_auditoria_seguridad
+                ;;
+                         
+
+            3)
                 clear
                 mostrar_logo_stop4me
                 pintar "$CIAN" "--- CONFIGURAR NIVEL DE REGISTRO (LOGGING) DE UFW ---"
@@ -811,7 +706,7 @@ analizar_trafico_red() {
                 read -p "Presione Enter para continuar..."
                 ;;
 
-            6) gestionar_logs_script ;;
+            4) gestionar_logs_script ;;
             *) break ;;
         esac
     done
@@ -870,7 +765,7 @@ stop4me_main_menu() {
         local seleccion
         seleccion=$(echo -e "$opciones" | fzf_estilo "Selección" "S T O P 4 M E  -  U F W  M A N A G E R")
 
-        if [ $? -ne 0 ] || [ -z "$seleccion" ] || [[ "${seleccion:0:1}" == "8" ]]; then
+        if [ $? -ne 0 ] || [ -z "$seleccion" ] || [[ "${seleccion:0:1}" == "5" ]]; then
             salir_stop4me
             break
         fi
